@@ -1,73 +1,48 @@
-const { Client, GatewayIntentBits, Events, EmbedBuilder } = require('discord.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const { Client, Collection, Events, GatewayIntentBits } = require('discord.js');
 require('dotenv').config();
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-client.once(Events.ClientReady, () => {
-  console.log(`Ready! Logged in as ${client.user.tag}`);
+client.commands = new Collection();
+
+const commandsPath = path.join(__dirname, 'commands');
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
+
+for (const file of commandFiles) {
+    const command = require(path.join(commandsPath, file));
+    if ('data' in command && 'execute' in command) {
+        client.commands.set(command.data.name, command);
+    } else {
+        console.warn(`Skipping ${file}: missing "data" or "execute" export.`);
+    }
+}
+
+client.once(Events.ClientReady, readyClient => {
+    console.log(`Ready! Logged in as ${readyClient.user.tag}`);
 });
 
 client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isChatInputCommand()) return;
+    if (!interaction.isChatInputCommand()) return;
 
-  const { commandName } = interaction;
+    const command = client.commands.get(interaction.commandName);
+    if (!command) {
+        console.warn(`No command matching ${interaction.commandName} was found.`);
+        return;
+    }
 
-  if (commandName === 'ping') {
-    const sent = await interaction.reply({ content: 'Pinging...', fetchReply: true });
-    const latency = sent.createdTimestamp - interaction.createdTimestamp;
-    await interaction.editReply(`Pong! Latency: ${latency}ms | API Latency: ${Math.round(client.ws.ping)}ms`);
-  }
-
-  else if (commandName === 'hello') {
-    const greetings = [
-      `Hey there, ${interaction.user.username}!`,
-      `What's up, ${interaction.user.username}?`,
-      `Hello, ${interaction.user.username}! How's it going?`,
-      `Hi ${interaction.user.username}! Nice to see you!`,
-    ];
-    const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
-    await interaction.reply(randomGreeting);
-  }
-
-  else if (commandName === 'serverinfo') {
-    const guild = interaction.guild;
-    const embed = new EmbedBuilder()
-      .setTitle(guild.name)
-      .setThumbnail(guild.iconURL())
-      .addFields(
-        { name: 'Members', value: `${guild.memberCount}`, inline: true },
-        { name: 'Created', value: `${guild.createdAt.toDateString()}`, inline: true },
-        { name: 'Server ID', value: `${guild.id}`, inline: true },
-      )
-      .setColor(0x5865F2);
-    await interaction.reply({ embeds: [embed] });
-  }
-
-  else if (commandName === 'userinfo') {
-    const user = interaction.user;
-    const member = interaction.member;
-    const embed = new EmbedBuilder()
-      .setTitle(user.username)
-      .setThumbnail(user.displayAvatarURL())
-      .addFields(
-        { name: 'User ID', value: `${user.id}`, inline: true },
-        { name: 'Joined Server', value: `${member.joinedAt.toDateString()}`, inline: true },
-        { name: 'Account Created', value: `${user.createdAt.toDateString()}`, inline: true },
-      )
-      .setColor(0x57F287);
-    await interaction.reply({ embeds: [embed] });
-  }
-
-  else if (commandName === 'roll') {
-    const sides = interaction.options.getInteger('sides') || 6;
-    const result = Math.floor(Math.random() * sides) + 1;
-    await interaction.reply(`You rolled a **${result}** (d${sides})`);
-  }
-
-  else if (commandName === 'coinflip') {
-    const result = Math.random() < 0.5 ? 'Heads' : 'Tails';
-    await interaction.reply(`The coin landed on **${result}**!`);
-  }
+    try {
+        await command.execute(interaction);
+    } catch (error) {
+        console.error(`Error executing ${interaction.commandName}:`, error);
+        const errorMessage = { content: 'There was an error while executing this command.', ephemeral: true };
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp(errorMessage);
+        } else {
+            await interaction.reply(errorMessage);
+        }
+    }
 });
 
 client.login(process.env.DISCORD_TOKEN);
